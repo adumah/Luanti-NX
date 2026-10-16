@@ -4,7 +4,7 @@
 Nintendo Switch**, as a homebrew app for consoles running custom firmware.
 
 Luanti is a free, open-source voxel game engine. This port runs the full Luanti client on
-the Switch, with singleplayer worlds, controller and touch controls, sound, and online
+the Switch, with singleplayer worlds, controller and touch controls, sound, and 
 content downloads from ContentDB. It comes with **Development Test** and
 **Minetest Game**, and more games (for example Mineclonia or VoxeLibre), mods and
 texture packs can be installed from inside the app.
@@ -98,13 +98,14 @@ are welcome.
 - **Controller pointer in menus** (move with the left stick, click with A)
 - **Switch system keyboard** for text fields
 - **Sound and music**
-- **ContentDB**: browse, install, update and delete games, mods and texture packs online
+- **ContentDB**: browse, install, update and delete games, mods and texture packs 
 - Texture packs, minimap, screenshots
 - **LuaJIT** (interpreter mode) and performance settings tuned for the Switch
 - **Shaders / Optional visual effects** (post-processing, e.g. bloom): off by default,
   enable them in **Settings → Graphics and Audio → Effects**. They work, but expect lower
   and less stable performance with them turned on.
 - Bundled games: Development Test and Minetest Game
+- Multiplayer working!
 
 ## Requirements
 
@@ -175,7 +176,6 @@ Tapping or clicking a text field opens the Switch keyboard. Controls can be chan
 - Performance varies, especially in heavy games (see the performance notice).
 - In VoxeLibre, mobs can fly further than normal when punched while the game lags. That
   comes from how VoxeLibre slows mobs down, and is not a bug in this port.
-- Online multiplayer is untested.
 
 ## Reporting problems
 
