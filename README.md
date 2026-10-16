@@ -70,8 +70,13 @@ Overclocking the CPU, e.g. with [sys-clk](https://github.com/retronx-team/sys-cl
 1020 MHz; overclocks go up to about 1785 MHz) makes it proportionally faster, at most
 around 1.75×. It **won't remove the lag**, though. It can't make up for the missing JIT
 compiler, and parts of the slowdown (SD card access, generating new terrain) don't scale
-with the clock. Overclocking also increases heat and battery use; you do it at your own
-risk.
+with the clock.
+
+> **⚠️ Overclocking is entirely at your own risk.** It increases heat, power draw and
+> battery drain, and can cause instability or damage to your console. **Luanti-NX and its
+> author are not responsible for any damage to your console, SD card or data** caused by
+> overclocking or by using overclocking tools. Luanti-NX doesn't overclock anything
+> itself, and it works without overclocking.
 
 ### Want to help? Bring the JIT to the Switch
 
@@ -96,6 +101,9 @@ are welcome.
 - **ContentDB**: browse, install, update and delete games, mods and texture packs online
 - Texture packs, minimap, screenshots
 - **LuaJIT** (interpreter mode) and performance settings tuned for the Switch
+- **Optional visual effects** (post-processing, e.g. bloom): off by default, enable them
+  in **Settings → Graphics and Audio → Effects**. They work, but expect lower and less
+  stable performance with them turned on.
 - Bundled games: Development Test and Minetest Game
 
 ## Requirements
@@ -159,7 +167,8 @@ Tapping or clicking a text field opens the Switch keyboard. Controls can be chan
   worlds created with this version.
 - **Settings in `minetest.conf` override the Switch defaults.** If something behaves
   oddly after an update, remove the matching line from `sdmc:/switch/luanti/minetest.conf`.
-- **Overclocking** helps a bit; see the performance notice above.
+- **Overclocking** helps a bit; see the performance notice above. **At your own risk:
+  we are not responsible for any damage to your console.**
 
 ## Known issues
 
