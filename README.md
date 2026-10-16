@@ -16,7 +16,7 @@ and it is not a pull request or a proposed contribution to Luanti.** Nothing her
 to be merged into the official engine.
 
 **AI disclosure:** I don't have much programming experience, so this port was made with
-the help (or entirely) of Claude. I tested every build on real hardware (Nintendo Switch Lite),
+the help of Claude (or entirely by it). I tested every build on real hardware (Nintendo Switch Lite),
 but most of the code changes in `patches/` and `stubs/` were written by the AI.
 
 The Luanti project has a [Generative AI policy](https://github.com/luanti-org/luanti/blob/master/doc/developing/ai_policy.md)
@@ -25,8 +25,8 @@ AI-generated pull requests. I respect that, which is why this port stays a separ
 self-contained project and will not be submitted to Luanti.
 
 Console ports are something the Luanti team has said they don't have the resources to
-work on themselves. Like it says in:
-[wrote](https://github.com/luanti-org/luanti/issues/12624#issuecomment-1214442746):
+work on themselves. As a Luanti team member
+[wrote](https://github.com/luanti-org/luanti/issues/12624#issuecomment-1214442746) in the issue about homebrew console ports:
 *"Minetest has limited resources. Contributors are welcome to try to port Minetest to
 their consoles via homebrew, but this isn't something we should track as an issue."*
 This project is one such attempt.
@@ -35,10 +35,10 @@ This project is one such attempt.
 - **Don't report problems with this port to the official Luanti project.** Bugs that only
   happen on the Switch are caused by this port; report them here instead.
 - **Use it only if you're comfortable with how it was made.** Nobody has to use this
-  project, and I'm not asking anyone to. If you'd rather not use Ai/Vibe Coded-made, that's
+  project, and I'm not asking anyone to. If you'd rather not use AI/vibe-coded software, that's
   completely your decision.
 
-**If you want to make your own port without AI:** Go ahead, Due the Switch hardware
+**If you want to make your own port without AI:** Go ahead! Due to the Switch's hardware
 limitations, I'd suggest aiming for a build with full LuaJIT (including its JIT compiler)
 if the Switch can support it, since that's where most of the performance is (see below).
 You're welcome to use anything from this repository, or nothing at all, whichever you
@@ -46,16 +46,16 @@ prefer.
 
 ## ⚠️ Performance notice
 
-Performance **may** be stable: expect smooth moments mixed with stutters, slow chunk
+Performance **may not** be stable: expect smooth moments mixed with stutters, slow chunk
 loading at the edge of your view, and occasional lag spikes, especially in big games like
 Mineclonia or VoxeLibre. Light games such as Minetest Game and Development Test run
-noticeably better. Some games are not updated to the latest Luanti changes, so maybe they
-won't run (ask for their creators to update them)
+noticeably better. Some games are not updated to the latest Luanti changes, so they may
+not run (ask their creators to update them).
 
 The main reason is **LuaJIT**. Almost all game logic in Luanti (mobs, crafting, world
 generation, machines) is Lua code. On PC and Android, Luanti runs that code with LuaJIT's
-**JIT compiler**, which turns it into fast machine code at runtime. Switch System (Horizon OS)
-system doesn't let programs create executable code that way, so this port uses **LuaJIT
+**JIT compiler**, which turns it into fast machine code at runtime. The Switch's system (Horizon OS)
+doesn't let programs create executable code that way, so this port uses **LuaJIT
 in interpreter-only mode**. That is still faster than standard Lua (mod loading in
 VoxeLibre went from 34 s to 25 s), but for heavy games the JIT can be **5–10× faster or
 more**, and that is the gap you feel.
@@ -102,8 +102,8 @@ are welcome.
 - Texture packs, minimap, screenshots
 - **LuaJIT** (interpreter mode) and performance settings tuned for the Switch
 - **Shaders / Optional visual effects** (post-processing, e.g. bloom): off by default,
-- enable them in **Settings → Graphics and Audio → Effects**. They work, but expect lower
-- and less stable performance with them turned on.
+  enable them in **Settings → Graphics and Audio → Effects**. They work, but expect lower
+  and less stable performance with them turned on.
 - Bundled games: Development Test and Minetest Game
 
 ## Requirements
