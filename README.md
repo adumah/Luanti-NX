@@ -2,7 +2,6 @@
 
 **An unofficial port of [Luanti](https://www.luanti.org/) (formerly Minetest) to the
 Nintendo Switch**, as a homebrew app for consoles running custom firmware.
-By **Adumah**.
 
 Luanti is a free, open-source voxel game engine. This port runs the full Luanti client on
 the Switch, with singleplayer worlds, controller and touch controls, sound, and online
@@ -10,14 +9,14 @@ content downloads from ContentDB. It comes with **Development Test** and
 **Minetest Game**, and more games (for example Mineclonia or VoxeLibre), mods and
 texture packs can be installed from inside the app.
 
-## About this project (please read)
+## About this project
 
 **This is an unofficial, independent port. It is not affiliated with the Luanti project,
 and it is not a pull request or a proposed contribution to Luanti.** Nothing here is meant
 to be merged into the official engine.
 
 **AI disclosure:** I don't have much programming experience, so this port was made with
-the help of an AI assistant (Claude, by Anthropic). I tested every build on a real Switch,
+the help (or entirely) of Claude. I tested every build on real hardware (Nintendo Switch Lite),
 but most of the code changes in `patches/` and `stubs/` were written by the AI.
 
 The Luanti project has a [Generative AI policy](https://github.com/luanti-org/luanti/blob/master/doc/developing/ai_policy.md)
@@ -26,7 +25,7 @@ AI-generated pull requests. I respect that, which is why this port stays a separ
 self-contained project and will not be submitted to Luanti.
 
 Console ports are something the Luanti team has said they don't have the resources to
-work on themselves. In the issue about homebrew console ports, a Luanti team member
+work on themselves. Like it says in:
 [wrote](https://github.com/luanti-org/luanti/issues/12624#issuecomment-1214442746):
 *"Minetest has limited resources. Contributors are welcome to try to port Minetest to
 their consoles via homebrew, but this isn't something we should track as an issue."*
@@ -36,10 +35,10 @@ This project is one such attempt.
 - **Don't report problems with this port to the official Luanti project.** Bugs that only
   happen on the Switch are caused by this port; report them here instead.
 - **Use it only if you're comfortable with how it was made.** Nobody has to use this
-  project, and I'm not asking anyone to. If you'd rather not use AI-made code, that's
-  completely fine.
+  project, and I'm not asking anyone to. If you'd rather not use Ai/Vibe Coded-made, that's
+  completely your decision.
 
-**If you want to make your own port without AI:** go for it! Given the Switch's
+**If you want to make your own port without AI:** Go ahead, Due the Switch hardware
 limitations, I'd suggest aiming for a build with full LuaJIT (including its JIT compiler)
 if the Switch can support it, since that's where most of the performance is (see below).
 You're welcome to use anything from this repository, or nothing at all, whichever you
@@ -47,14 +46,15 @@ prefer.
 
 ## ⚠️ Performance notice
 
-Performance is **not constant**: expect smooth moments mixed with stutters, slow chunk
+Performance **may** be stable: expect smooth moments mixed with stutters, slow chunk
 loading at the edge of your view, and occasional lag spikes, especially in big games like
-Mineclonia and VoxeLibre. Light games such as Minetest Game and Development Test run
-noticeably better.
+Mineclonia or VoxeLibre. Light games such as Minetest Game and Development Test run
+noticeably better. Some games are not updated to the latest Luanti changes, so maybe they
+won't run (ask for their creators to update them)
 
 The main reason is **LuaJIT**. Almost all game logic in Luanti (mobs, crafting, world
 generation, machines) is Lua code. On PC and Android, Luanti runs that code with LuaJIT's
-**JIT compiler**, which turns it into fast machine code at runtime. The Switch's operating
+**JIT compiler**, which turns it into fast machine code at runtime. Switch System (Horizon OS)
 system doesn't let programs create executable code that way, so this port uses **LuaJIT
 in interpreter-only mode**. That is still faster than standard Lua (mod loading in
 VoxeLibre went from 34 s to 25 s), but for heavy games the JIT can be **5–10× faster or
@@ -101,9 +101,9 @@ are welcome.
 - **ContentDB**: browse, install, update and delete games, mods and texture packs online
 - Texture packs, minimap, screenshots
 - **LuaJIT** (interpreter mode) and performance settings tuned for the Switch
-- **Optional visual effects** (post-processing, e.g. bloom): off by default, enable them
-  in **Settings → Graphics and Audio → Effects**. They work, but expect lower and less
-  stable performance with them turned on.
+- **Shaders / Optional visual effects** (post-processing, e.g. bloom): off by default,
+- enable them in **Settings → Graphics and Audio → Effects**. They work, but expect lower
+- and less stable performance with them turned on.
 - Bundled games: Development Test and Minetest Game
 
 ## Requirements
@@ -201,7 +201,7 @@ All Switch-specific changes to Luanti are in [`patches/`](patches/) and
 - **devkitPro** and **libnx** for the Switch homebrew toolchain
 - Performance defaults inspired by the [PortMaster](https://portmaster.games/) Luanti port
   and Luanti's own Android settings
-- Port by **Adumah**, made with the help of Claude (Anthropic); see
+- Made with the help of Claude (Anthropic); see
   *About this project* above
 
 Luanti-NX is licensed under the **GNU Lesser General Public License v2.1 or later**, like
