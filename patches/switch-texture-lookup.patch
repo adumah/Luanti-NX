@@ -1,0 +1,101 @@
+diff --git a/src/client/texturepaths.cpp b/src/client/texturepaths.cpp
+index 8b9861b..91c8dd5 100644
+--- a/src/client/texturepaths.cpp
++++ b/src/client/texturepaths.cpp
+@@ -11,16 +11,72 @@
+ #include "filesys.h"
+ #include "porting.h"
+ #include <vector>
++#ifdef __SWITCH__
++#include <memory>
++#include <unordered_set>
++#endif
+ 
+ // A cache from texture name to texture path
+ static MutexedMap<std::string, std::string> g_texturename_to_path_cache;
+ // Cached result of getTextureDirs()
+ static MutexedVariable<std::vector<std::string>> g_texturedirs_cache;
+ 
++#ifdef __SWITCH__
++// Every file-exists check is a round trip to Horizon's filesystem service, and
++// with a texture pack each texture probes all pack folders with every extension
++// (tens of thousands of checks while loading media). List each folder once and
++// answer from memory. Names are lowercased: FAT/exFAT ignore case.
++using DirListing = std::shared_ptr<const std::unordered_set<std::string>>;
++static MutexedMap<std::string, DirListing> g_dir_listing_cache;
++
++static bool cachedFileExists(const std::string &path)
++{
++	size_t pos = path.find_last_of(DIR_DELIM_CHAR);
++	if (pos == std::string::npos)
++		return fs::PathExists(path);
++	std::string dir = path.substr(0, pos);
++
++	DirListing files;
++	if (!g_dir_listing_cache.get(dir, &files)) {
++		auto set = std::make_shared<std::unordered_set<std::string>>();
++		for (const auto &entry : fs::GetDirListing(dir)) {
++			if (!entry.dir)
++				set->insert(lowercase(entry.name));
++		}
++		files = set;
++		g_dir_listing_cache.set(dir, files);
++	}
++	return files->count(lowercase(path.substr(pos + 1))) > 0;
++}
++
++static std::string getImagePathCached(std::string_view path)
++{
++	static const char *extensions[] = {".png", ".jpg", ".tga", nullptr};
++
++	std::string_view stripped_path = removeStringEnd(path, extensions);
++	if (stripped_path.empty())
++		stripped_path = path;
++
++	for (const char *ext : extensions) {
++		if (!ext)
++			break;
++		std::string extended_path(stripped_path);
++		extended_path.append(ext);
++		if (cachedFileExists(extended_path))
++			return extended_path;
++	}
++
++	return "";
++}
++#endif
++
+ void clearTextureNameCache()
+ {
+ 	g_texturename_to_path_cache.clear();
+ 	g_texturedirs_cache.set({});
++#ifdef __SWITCH__
++	g_dir_listing_cache.clear();
++#endif
+ }
+ 
+ // Find out the full path of an image by trying different filename extensions.
+@@ -74,7 +130,11 @@ std::string getTexturePath(const std::string &filename, bool *is_base_pack)
+ 	// Check from texture_path setting
+ 	for (const auto &path : getTextureDirs()) {
+ 		// Check all filename extensions. Returns "" if not found.
++#ifdef __SWITCH__
++		fullpath = getImagePathCached(path + DIR_DELIM + filename);
++#else
+ 		fullpath = getImagePath(path + DIR_DELIM + filename);
++#endif
+ 		if (!fullpath.empty())
+ 			break;
+ 	}
+@@ -84,7 +144,11 @@ std::string getTexturePath(const std::string &filename, bool *is_base_pack)
+ 		std::string base_path = porting::path_share + DIR_DELIM "textures"
+ 				DIR_DELIM "base" DIR_DELIM "pack";
+ 		// Check all filename extensions. Returns "" if not found.
++#ifdef __SWITCH__
++		fullpath = getImagePathCached(base_path + DIR_DELIM + filename);
++#else
+ 		fullpath = getImagePath(base_path + DIR_DELIM + filename);
++#endif
+ 		if (is_base_pack && !fullpath.empty())
+ 			*is_base_pack = true;
+ 	}

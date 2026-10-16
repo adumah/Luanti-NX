@@ -1,0 +1,45 @@
+diff --git a/src/defaultsettings.cpp b/src/defaultsettings.cpp
+index d495bea..d8cfa04 100644
+--- a/src/defaultsettings.cpp
++++ b/src/defaultsettings.cpp
+@@ -604,4 +604,40 @@ void set_default_settings()
+ 	}
+ 	// Tablets >= 6.0 use non-Android defaults for these settings
+ #endif
++
++#ifdef __SWITCH__
++	// Controller-first: touch controls hide the crosshair, so the controller
++	// couldn't dig/place. D-pad Left no longer toggles fly; R3 changes camera.
++	settings->setDefault("touch_controls", "false");
++	settings->setDefault("keymap_freemove", "SYSTEM_SCANCODE_14"); // KEY_KEY_K
++	settings->setDefault("keymap_camera_mode", "SYSTEM_SCANCODE_6|GAMEPAD_BUTTON_8"); // KEY_KEY_C|Right Stick (R3)
++
++	// Performance, after the PortMaster Luanti port for ARM handhelds.
++	// Small map chunks (new worlds only) keep each generation step short.
++	settings->setDefault("chunksize", "1");
++	settings->setDefault("emergequeue_limit_total", "64");
++	settings->setDefault("viewing_range", "60");
++	settings->setDefault("active_block_range", "2");
++	settings->setDefault("active_object_send_range_blocks", "4");
++	settings->setDefault("performance_tradeoffs", "true");
++	// PortMaster's 100 is far below what even a 60-node view needs, so the client
++	// kept discarding visible chunks and re-requesting them. Android uses 2200.
++	settings->setDefault("client_mapblock_limit", "2200");
++	settings->setDefault("client_unload_unused_data_timeout", "40");
++	settings->setDefault("enable_fog", "false");
++	settings->setDefault("enable_3d_clouds", "false");
++	settings->setDefault("enable_raytraced_culling", "false");
++	settings->setDefault("mcl_mob_cap_total", "250"); // Mineclonia/VoxeLibre
++	// From Luanti's Android defaults (ARM CPU, slow storage): fewer forced flushes
++	// and bigger save batches for new terrain, generate close to the player first,
++	// smaller emerge queues and less work per server step.
++	settings->setDefault("sqlite_synchronous", "1");
++	settings->setDefault("server_map_save_interval", "15");
++	settings->setDefault("max_block_generate_distance", "5");
++	settings->setDefault("emergequeue_limit_diskonly", "32");
++	settings->setDefault("emergequeue_limit_generate", "32");
++	settings->setDefault("max_simultaneous_block_sends_per_client", "20");
++	settings->setDefault("leaves_style", "simple");
++	settings->setDefault("enable_post_processing", "false");
++#endif
+ }

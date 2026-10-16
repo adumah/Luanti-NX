@@ -1,0 +1,89 @@
+diff --git a/src/client/filecache.cpp b/src/client/filecache.cpp
+index 5691f17..9c8d215 100644
+--- a/src/client/filecache.cpp
++++ b/src/client/filecache.cpp
+@@ -11,6 +11,19 @@
+ #include <iostream>
+ #include <fstream>
+ 
++#ifdef __SWITCH__
++// FAT looks names up linearly, so one folder holding thousands of cached media
++// files makes every check and create slow. Spread the files over subfolders
++// named after the first two characters of the name (like git objects).
++static std::string cacheSubdir(const std::string &dir, const std::string &name)
++{
++	return name.size() > 2 ? dir + DIR_DELIM + name.substr(0, 2) : dir;
++}
++#define CACHE_PATH(name) (cacheSubdir(m_dir, (name)) + DIR_DELIM + (name))
++#else
++#define CACHE_PATH(name) (m_dir + DIR_DELIM + (name))
++#endif
++
+ void FileCache::createDir()
+ {
+ 	if (!fs::CreateAllDirs(m_dir)) {
+@@ -62,26 +75,32 @@ bool FileCache::updateByPath(const std::string &path, std::string_view data)
+ 
+ bool FileCache::update(const std::string &name, std::string_view data)
+ {
+-	std::string path = m_dir + DIR_DELIM + name;
++#ifdef __SWITCH__
++	fs::CreateAllDirs(cacheSubdir(m_dir, name));
++#endif
++	std::string path = CACHE_PATH(name);
+ 	return updateByPath(path, data);
+ }
+ 
+ bool FileCache::load(const std::string &name, std::ostream &os)
+ {
+-	std::string path = m_dir + DIR_DELIM + name;
++	std::string path = CACHE_PATH(name);
+ 	return loadByPath(path, os);
+ }
+ 
+ bool FileCache::exists(const std::string &name)
+ {
+-	std::string path = m_dir + DIR_DELIM + name;
++	std::string path = CACHE_PATH(name);
+ 	return fs::PathExists(path);
+ }
+ 
+ bool FileCache::updateCopyFile(const std::string &name, const std::string &src_path)
+ {
+-	std::string path = m_dir + DIR_DELIM + name;
++	std::string path = CACHE_PATH(name);
+ 
+ 	createDir();
++#ifdef __SWITCH__
++	fs::CreateAllDirs(cacheSubdir(m_dir, name));
++#endif
+ 	return fs::CopyFileContents(src_path, path);
+ }
+diff --git a/src/filesys.cpp b/src/filesys.cpp
+index 9a8db21..80124e8 100644
+--- a/src/filesys.cpp
++++ b/src/filesys.cpp
+@@ -437,10 +437,22 @@ bool CopyFileContents(const std::string &source, const std::string &target)
+ 
+ 	size_t total = 0;
+ 	bool done = false;
++#ifdef __SWITCH__
++	// newlib's BUFSIZ is 1 KiB and every read/write is a Horizon FS request,
++	// which made copying a big game's media into the cache take many minutes.
++	// Copy in large chunks without stdio buffering instead.
++	setvbuf(sourcefile.get(), nullptr, _IONBF, 0);
++	setvbuf(targetfile.get(), nullptr, _IONBF, 0);
++	std::vector<char> readbuffer_storage(256 * 1024);
++	char *readbuffer = readbuffer_storage.data();
++	const size_t readbuffer_size = readbuffer_storage.size();
++#else
+ 	char readbuffer[BUFSIZ];
++	const size_t readbuffer_size = sizeof(readbuffer);
++#endif
+ 	while (!done) {
+ 		size_t readbytes = fread(readbuffer, 1,
+-				sizeof(readbuffer), sourcefile.get());
++				readbuffer_size, sourcefile.get());
+ 		total += readbytes;
+ 		if (ferror(sourcefile.get())) {
+ 			errorstream << source << ": IO error: "

@@ -1,0 +1,83 @@
+diff --git a/src/client/sound/sound_data.cpp b/src/client/sound/sound_data.cpp
+index 8cc3b0e..0731978 100644
+--- a/src/client/sound/sound_data.cpp
++++ b/src/client/sound/sound_data.cpp
+@@ -9,6 +9,9 @@
+ #include "sound_data.h"
+ 
+ #include "sound_constants.h"
++#ifdef __SWITCH__
++#include "filesys.h"
++#endif
+ #include <algorithm>
+ 
+ namespace sound {
+@@ -68,6 +71,16 @@ std::shared_ptr<ISoundDataOpen> SoundDataUnopenFile::open(const std::string &sou
+ {
+ 	// load from file at m_path
+ 
++#ifdef __SWITCH__
++	// Opened sounds stay cached (e.g. a game's menu music) and ov_fopen keeps
++	// the file open meanwhile; Horizon can't delete open files, so deleting or
++	// updating that game failed. Decode from memory instead.
++	std::string data;
++	if (!fs::ReadFile(m_path, data, true))
++		return nullptr;
++	return SoundDataUnopenBuffer(std::move(data)).open(sound_name);
++#endif
++
+ 	auto oggfile = std::make_unique<RAIIOggFile>();
+ 
+ 	if (ov_fopen(m_path.c_str(), oggfile->get()) != 0) {
+diff --git a/src/filesys.cpp b/src/filesys.cpp
+index 9a8db21..aa69729 100644
+--- a/src/filesys.cpp
++++ b/src/filesys.cpp
+@@ -472,6 +472,37 @@ bool CopyFileContents(const std::string &source, const std::string &target)
+  * portable implementations *
+  ****************************/
+ 
++#ifdef __SWITCH__
++// List a directory completely before deleting its entries (not while its handle
++// is open, as remove_all does), and report the exact entry that fails.
++static bool switch_remove_tree(const std::filesystem::path &p)
++{
++	std::error_code ec;
++	bool ok = true;
++	if (std::filesystem::symlink_status(p, ec).type() == std::filesystem::file_type::directory) {
++		std::vector<std::filesystem::path> children;
++		for (std::filesystem::directory_iterator it(p, ec), end; !ec && it != end; it.increment(ec))
++			children.push_back(it->path());
++		if (ec) {
++			errorstream << "RecursiveDelete: Failed to list \"" << p.string()
++					<< "\": " << ec.message() << std::endl;
++			return false;
++		}
++		for (const auto &child : children)
++			ok &= switch_remove_tree(child);
++	}
++	if (!ok)
++		return false;
++	std::filesystem::remove(p, ec);
++	if (ec) {
++		errorstream << "RecursiveDelete: Failed to delete \"" << p.string()
++				<< "\": " << ec.message() << std::endl;
++		return false;
++	}
++	return true;
++}
++#endif
++
+ bool RecursiveDelete(const std::string &path)
+ {
+ 	assert(IsPathAbsolute(path));
+@@ -508,6 +539,9 @@ bool RecursiveDelete(const std::string &path)
+ 
+ 	infostream << "Recursively deleting \"" << path << "\"" << std::endl;
+ 
++#ifdef __SWITCH__
++	return switch_remove_tree(p);
++#endif
+ 	// Deletes symlinks instead of following them.
+ 	std::filesystem::remove_all(p, ec);
+ 	if (ec) {

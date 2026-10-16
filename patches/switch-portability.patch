@@ -1,0 +1,157 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 6cdefe6..3ebd053 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -117,7 +117,7 @@ if(BUILD_CLIENT AND ENABLE_SOUND)
+ 	# Sound libraries
+ 	find_package(OpenAL)
+ 	find_package(Vorbis)
+-	if(NOT OPENAL_FOUND)
++	if(NOT OPENAL_FOUND AND NOT OpenAL_FOUND)
+ 		message(STATUS "Sound enabled, but OpenAL not found!")
+ 		mark_as_advanced(CLEAR OPENAL_LIBRARY OPENAL_INCLUDE_DIR)
+ 	endif()
+@@ -125,7 +125,7 @@ if(BUILD_CLIENT AND ENABLE_SOUND)
+ 		message(STATUS "Sound enabled, but Vorbis libraries not found!")
+ 		mark_as_advanced(CLEAR OGG_INCLUDE_DIR VORBIS_INCLUDE_DIR OGG_LIBRARY VORBIS_LIBRARY VORBISFILE_LIBRARY)
+ 	endif()
+-	if(OPENAL_FOUND AND VORBIS_FOUND)
++	if((OPENAL_FOUND OR OpenAL_FOUND) AND VORBIS_FOUND)
+ 		set(USE_SOUND TRUE)
+ 		message(STATUS "Sound enabled.")
+ 	else()
+@@ -328,7 +328,9 @@ if(WIN32)
+ 	endif()
+ else()
+ 	# Unix probably
+-	list(APPEND PLATFORM_LIBS ${CMAKE_DL_LIBS})
++	if(NOT NINTENDO_SWITCH)
++		list(APPEND PLATFORM_LIBS ${CMAKE_DL_LIBS})
++	endif()
+ 
+ 	check_library_exists(m frexpf "" HAVE_LIBM)
+ 	if (HAVE_LIBM)
+diff --git a/src/client/game.cpp b/src/client/game.cpp
+index a1ac678..f7c43f7 100644
+--- a/src/client/game.cpp
++++ b/src/client/game.cpp
+@@ -800,7 +800,16 @@ bool Game::createServer(GameStartData &start_data)
+ 			showOverlayMessage(N_("Shutting down..."), dtime, 0, &m_shutdown_progress);
+ 	}
+ 
++#ifdef __SWITCH__ // Switch: log server start failures before unwinding
++	try {
++		start_thread->rethrow();
++	} catch (const std::exception &e) {
++		errorstream << "Server start failed: " << e.what() << std::endl;
++		throw;
++	}
++#else
+ 	start_thread->rethrow();
++#endif
+ 
+ 	return success;
+ }
+diff --git a/src/filesys.cpp b/src/filesys.cpp
+index 9a8db21..61189ba 100644
+--- a/src/filesys.cpp
++++ b/src/filesys.cpp
+@@ -297,6 +297,11 @@ bool PathExists(const std::string &path)
+ 
+ bool IsPathAbsolute(const std::string &path)
+ {
++#ifdef __SWITCH__ // Switch: device prefix ("sdmc:/") also makes a path absolute
++	size_t colon = path.find(':');
++	if (colon != std::string::npos && colon > 0 && path.find('/') == colon + 1)
++		return true;
++#endif
+ 	return path[0] == '/';
+ }
+ 
+@@ -976,6 +981,9 @@ bool safeWriteToFile(const std::string &path, std::string_view content)
+ 	// On POSIX compliant systems rename() is specified to be able to swap the
+ 	// file in place of the destination file, making this a truly error-proof
+ 	// transaction.
++#ifdef __SWITCH__ // Switch: rename() refuses to overwrite
++	remove(path.c_str());
++#endif
+ 	if (rename(tmp_file.c_str(), path.c_str()) != 0)
+ 		rename_error = LAST_OS_ERROR();
+ #endif
+diff --git a/src/network/socket.cpp b/src/network/socket.cpp
+index 3acf645..da23479 100644
+--- a/src/network/socket.cpp
++++ b/src/network/socket.cpp
+@@ -306,6 +306,18 @@ bool UDPSocket::WaitData(int timeout_ms)
+ 		return false;
+ 	}
+ 
++#ifdef __SWITCH__ // Switch: poll errors on closed sockets
++	{
++		static bool logged = false;
++		if (!logged) {
++			logged = true;
++			errorstream << (int)m_handle << ": poll failed (ignored): "
++				<< SOCKET_ERR_STR(e) << " (" << e << ")" << std::endl;
++		}
++		usleep(timeout_ms * 1000);
++		return false;
++	}
++#endif
+ 	tracestream << (int)m_handle << ": poll failed: "
+ 		<< SOCKET_ERR_STR(e) << std::endl;
+ 
+diff --git a/src/porting.cpp b/src/porting.cpp
+index 4c24e8c..05cfc35 100644
+--- a/src/porting.cpp
++++ b/src/porting.cpp
+@@ -808,6 +808,10 @@ bool secure_rand_fill_buf(void *buf, size_t len)
+ 
+ bool secure_rand_fill_buf(void *buf, size_t len)
+ {
++#ifdef __SWITCH__ // Switch: randomGet() from libnx, no /dev/urandom
++	randomGet(buf, len);
++	return true;
++#endif
+ 	// N.B.  This function checks *only* for /dev/urandom, because on most
+ 	// common OSes it is non-blocking, whereas /dev/random is blocking, and it
+ 	// is exceptionally uncommon for there to be a situation where /dev/random
+diff --git a/src/script/cpp_api/s_security.cpp b/src/script/cpp_api/s_security.cpp
+index b0bd1e7..d3b401f 100644
+--- a/src/script/cpp_api/s_security.cpp
++++ b/src/script/cpp_api/s_security.cpp
+@@ -645,8 +645,12 @@ void ScriptApiSecurity::replaceDefaultFiles(lua_State *L)
+ #ifdef _WIN32
+ 	const std::string null_file("NUL");
+ 	const bool should_unlink = false;
++#else
++#ifdef __SWITCH__
++	std::string null_file("null:/");
+ #else
+ 	std::string null_file("/dev/null");
++#endif
+ 	bool should_unlink = false;
+ 	// POSIX in fact guarantees /dev/null, but for the slim chance that it's
+ 	// not accessible use a (deleted) temporary file.
+diff --git a/src/util/serialize.h b/src/util/serialize.h
+index f3b6af8..b45e364 100644
+--- a/src/util/serialize.h
++++ b/src/util/serialize.h
+@@ -17,7 +17,7 @@
+ #include <string_view>
+ 
+ /* make sure BYTE_ORDER macros are available */
+-#if HAVE_ENDIAN_H
++#if 1 /* Switch: stub endian.h */
+ 	#include <endian.h>
+ #elif defined(_WIN32)
+ 	#define BYTE_ORDER 1234
+@@ -60,7 +60,7 @@ static constexpr float F1000_MAX = (s32)((float)(S32_MAX) / FIXEDPOINT_FACTOR);
+ 
+ extern FloatType g_serialize_f32_type;
+ 
+-#if HAVE_ENDIAN_H
++#if 1 /* Switch: stub endian.h */
+ // use machine native byte swapping routines
+ // Note: memcpy below is optimized out by modern compilers
+ 

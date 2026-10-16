@@ -1,0 +1,30 @@
+diff --git a/src/script/cpp_api/s_base.cpp b/src/script/cpp_api/s_base.cpp
+index 7ff8259..99c6ae0 100644
+--- a/src/script/cpp_api/s_base.cpp
++++ b/src/script/cpp_api/s_base.cpp
+@@ -103,6 +103,25 @@ ScriptApiBase::ScriptApiBase(ScriptingType type):
+ 	else
+ 		luaL_openlibs(m_luastack);
+ 
++#if defined(__SWITCH__) && USE_LUAJIT
++	// The Switch build's LuaJIT is interpreter-only, which has no jit.opt.
++	// Some games (VoxeLibre's tune_jit.lua) call jit.opt.start() whenever LuaJIT
++	// is present and crash without it; provide a no-op (nothing to tune).
++	lua_getglobal(m_luastack, "jit");
++	if (lua_istable(m_luastack, -1)) {
++		lua_getfield(m_luastack, -1, "opt");
++		bool has_opt = !lua_isnil(m_luastack, -1);
++		lua_pop(m_luastack, 1);
++		if (!has_opt) {
++			lua_newtable(m_luastack);
++			lua_pushcfunction(m_luastack, [](lua_State *) -> int { return 0; });
++			lua_setfield(m_luastack, -2, "start");
++			lua_setfield(m_luastack, -2, "opt");
++		}
++	}
++	lua_pop(m_luastack, 1);
++#endif
++
+ 	// Load bit library
+ 	lua_pushcfunction(m_luastack, luaopen_bit);
+ 	lua_pushstring(m_luastack, LUA_BITLIBNAME);

@@ -1,0 +1,44 @@
+diff --git a/builtin/mainmenu/content/pkgmgr.lua b/builtin/mainmenu/content/pkgmgr.lua
+index 4adbe42..f33dd90 100644
+--- a/builtin/mainmenu/content/pkgmgr.lua
++++ b/builtin/mainmenu/content/pkgmgr.lua
+@@ -122,7 +122,7 @@ function pkgmgr.get_mods(path, virtual_path, listing)
+ end
+ 
+ -- Must match PATH_DELIM in filesys.h
+-local PATH_DELIM = PLATFORM == "Windows" and ";" or ":"
++local PATH_DELIM = (PLATFORM == "Windows" or PLATFORM == "Switch") and ";" or ":"
+ 
+ --- Returns the ordered list of enabled texture pack paths, highest priority first.
+ function pkgmgr.get_enabled_texture_packs()
+diff --git a/src/filesys.h b/src/filesys.h
+index 121a77d..58dbc37 100644
+--- a/src/filesys.h
++++ b/src/filesys.h
+@@ -22,8 +22,13 @@
+ // is very wrong. Different folders on the same filesystem can even have differing
+ // case-sensitivity. This seems tough to handle correctly however.
+ #define FILESYS_CASE_INSENSITIVE false
++#ifdef __SWITCH__
++// Paths contain a device prefix ("sdmc:/..."), so ':' can't separate path lists.
++#define PATH_DELIM ";"
++#else
+ #define PATH_DELIM ":"
+ #endif
++#endif
+ 
+ namespace io {
+ class IFileSystem;
+diff --git a/src/porting.h b/src/porting.h
+index 20583ca..5b8302b 100644
+--- a/src/porting.h
++++ b/src/porting.h
+@@ -247,6 +247,8 @@ inline const char *getPlatformName()
+ 	return
+ #if defined(ANDROID)
+ 	"Android"
++#elif defined(__SWITCH__)
++	"Switch"
+ #elif defined(__linux__)
+ 	"Linux"
+ #elif defined(_WIN32) || defined(_WIN64)

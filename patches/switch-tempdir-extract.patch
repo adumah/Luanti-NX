@@ -1,0 +1,53 @@
+--- a/src/filesys.cpp
++++ b/src/filesys.cpp
+@@ -369,6 +369,25 @@
+ 
+ std::string CreateTempDir()
+ {
++#ifdef __SWITCH__
++	// devkitA64's newlib mkdtemp() is a stub that fails with ENOSYS.
++	// Pick a random name ourselves and create it, retrying on collisions.
++	for (int attempt = 0; attempt < 100; attempt++) {
++		uint32_t rnd;
++		randomGet(&rnd, sizeof(rnd));
++		char name[16];
++		snprintf(name, sizeof(name), "MT_%08x", (unsigned)rnd);
++		std::string path = TempPath() + DIR_DELIM + name;
++		if (mkdir(path.c_str(), 0700) == 0)
++			return path;
++		if (errno != EEXIST) {
++			warningstream << "CreateTempDir(): mkdir failed for \"" << path
++				<< "\": " << strerror(errno) << std::endl;
++			return "";
++		}
++	}
++	return "";
++#endif
+ 	std::string path = TempPath() + DIR_DELIM "MT_XXXXXX";
+ 	auto r = mkdtemp(&path[0]); // modifies path
+ 	if (!r)
+@@ -1031,8 +1050,12 @@
+ 	}
+ 
+ 	const auto num_entries = zip_get_num_entries(archive.get(), 0);
+-	if (num_entries < 0)
++	if (num_entries < 0) {
++#ifdef __SWITCH__
++		warningstream << "fs::extractZipFile(): failed to count entries" << std::endl;
++#endif
+ 		return false;
++	}
+ 
+ 	const auto zip_num_entries = static_cast<zip_uint64_t>(num_entries);
+ 	for (zip_uint64_t i = 0; i < zip_num_entries; ++i) {
+@@ -1070,6 +1093,10 @@
+ 		std::string fullpath_dir = fs::RemoveLastPathComponent(fullpath);
+ 
+ 		if (!fs::PathExists(fullpath_dir) && !fs::CreateAllDirs(fullpath_dir)) {
++#ifdef __SWITCH__
++			warningstream << "fs::extractZipFile(): failed to create \"" << fullpath_dir
++				<< "\": " << strerror(errno) << std::endl;
++#endif
+ 			return false;
+ 		}
+ 

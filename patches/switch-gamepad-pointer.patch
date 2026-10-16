@@ -1,0 +1,258 @@
+diff --git a/irr/src/CGUIEnvironment.cpp b/irr/src/CGUIEnvironment.cpp
+index beb2744..cf0ebf4 100644
+--- a/irr/src/CGUIEnvironment.cpp
++++ b/irr/src/CGUIEnvironment.cpp
+@@ -26,6 +26,12 @@
+ #include "BuiltInFont.h"
+ #include "os.h"
+ 
++#ifdef __SWITCH__
++// Gamepad pointer state, owned by CIrrDeviceSDL (SDL draws no cursor on the Switch).
++extern bool g_switchPointerShown;
++extern s32 g_switchPointerX, g_switchPointerY;
++#endif
++
+ namespace gui
+ {
+ 
+@@ -144,6 +150,19 @@ void CGUIEnvironment::loadBuiltInFont()
+ }
+ 
+ //! draws all gui elements
++#ifdef __SWITCH__
++static void drawSwitchPointer(video::IVideoDriver *driver, s32 x, s32 y)
++{
++	// Arrow pointer built from 1px rows: black outline, white fill.
++	const s32 h = core::max_<s32>(16, driver->getScreenSize().Height / 36);
++	const video::SColor black(255, 0, 0, 0), white(255, 255, 255, 255);
++	for (s32 r = 0; r <= h; r++)
++		driver->draw2DRectangle(black, core::recti(x, y + r, x + r * 5 / 8 + 2, y + r + 1));
++	for (s32 r = 2; r < h; r++)
++		driver->draw2DRectangle(white, core::recti(x + 1, y + r, x + r * 5 / 8, y + r + 1));
++}
++#endif
++
+ void CGUIEnvironment::drawAll(bool useScreenSize)
+ {
+ 	if (useScreenSize && Driver) {
+@@ -161,6 +180,10 @@ void CGUIEnvironment::drawAll(bool useScreenSize)
+ 		bringToFront(ToolTip.Element);
+ 
+ 	draw();
++#ifdef __SWITCH__
++	if (g_switchPointerShown && Driver)
++		drawSwitchPointer(Driver, g_switchPointerX, g_switchPointerY);
++#endif
+ 	OnPostRender(os::Timer::getTime());
+ 
+ 	clearDeletionQueue();
+diff --git a/irr/src/CIrrDeviceSDL.cpp b/irr/src/CIrrDeviceSDL.cpp
+index 39d5811..c220db9 100644
+--- a/irr/src/CIrrDeviceSDL.cpp
++++ b/irr/src/CIrrDeviceSDL.cpp
+@@ -765,6 +765,142 @@ static int wrap_PollEvent(SDL_Event *ev)
+ }
+ 
+ //! runs the device. Returns false if device wants to be deleted
++#ifdef __SWITCH__
++// Read by CGUIEnvironment::drawAll(), which draws the pointer (SDL draws none here).
++bool g_switchPointerShown = false;
++s32 g_switchPointerX = 0, g_switchPointerY = 0;
++
++// While a menu shows the cursor: A (SDL "B", east) = left click, Y (SDL "X", west)
++// = right click, left stick moves the pointer, right stick scrolls. These inputs
++// are kept from the game meanwhile. Returns true if the event was consumed.
++bool CIrrDeviceSDL::switchPadPointerEvent(const SDL_Event &e)
++{
++	const bool visible = CursorControl && CursorControl->isVisible();
++
++	if (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
++		if (e.caxis.axis > 3) // triggers stay with the game
++			return false;
++		PadPointerAxis[e.caxis.axis] = e.caxis.value / 32767.0f;
++		return visible;
++	}
++
++	const u8 b = e.cbutton.button;
++	if (b != SDL_CONTROLLER_BUTTON_B && b != SDL_CONTROLLER_BUTTON_X)
++		return false;
++	const bool left = b == SDL_CONTROLLER_BUTTON_B;
++	const u32 mask = SDL_BUTTON_MASK(left ? SDL_BUTTON_LEFT : SDL_BUTTON_RIGHT);
++	const bool down = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
++	// Always deliver the release of a click we started, even if the menu closed.
++	if (!visible && (down || !(MouseButtonStates & mask)))
++		return false;
++
++	if (down)
++		MouseButtonStates |= mask;
++	else
++		MouseButtonStates &= ~mask;
++
++	SEvent ev{};
++	ev.EventType = EET_MOUSE_INPUT_EVENT;
++	ev.MouseInput.Button = left ? SDL_BUTTON_LEFT : SDL_BUTTON_RIGHT;
++	if (left)
++		ev.MouseInput.Event = down ? EMIE_LMOUSE_PRESSED_DOWN : EMIE_LMOUSE_LEFT_UP;
++	else
++		ev.MouseInput.Event = down ? EMIE_RMOUSE_PRESSED_DOWN : EMIE_RMOUSE_LEFT_UP;
++	ev.MouseInput.X = MouseX;
++	ev.MouseInput.Y = MouseY;
++	ev.MouseInput.ButtonStates = MouseButtonStates;
++	g_switchPointerShown = visible;
++	postEventFromUser(ev);
++
++	if (down) {
++		u32 clicks = checkSuccessiveClicks(MouseX, MouseY, ev.MouseInput.Event);
++		if (clicks == 2 || clicks == 3) {
++			s32 base = clicks == 2 ? EMIE_LMOUSE_DOUBLE_CLICK : EMIE_LMOUSE_TRIPLE_CLICK;
++			ev.MouseInput.Event = (EMOUSE_INPUT_EVENT)(base + ev.MouseInput.Event - EMIE_LMOUSE_PRESSED_DOWN);
++			postEventFromUser(ev);
++		}
++	}
++	return true;
++}
++
++void CIrrDeviceSDL::switchPadPointerUpdate()
++{
++	const bool visible = CursorControl && CursorControl->isVisible();
++	const u32 now = os::Timer::getRealTime();
++	f32 dt = (now - PadPointerLastTime) / 1000.0f;
++	PadPointerLastTime = now;
++	if (dt > 0.1f)
++		dt = 0.1f;
++
++	if (visible && !PadPointerWasVisible) {
++		// A menu opened: the game keeps the last stick values it saw, so zero
++		// them, or the player would keep walking/turning behind the menu.
++		for (int a = 0; a < 4; a++) {
++			SEvent ev{};
++			ev.EventType = EET_GAMEPAD_AXIS_EVENT;
++			ev.GamepadAxisEvent.ID = recentGamepadID;
++			ev.GamepadAxisEvent.Axis = static_cast<GamepadAxis>(a);
++			ev.GamepadAxisEvent.Value = 0;
++			postEventFromUser(ev);
++		}
++	}
++	PadPointerWasVisible = visible;
++	if (!visible) {
++		g_switchPointerShown = false;
++		return;
++	}
++
++	// Dead zone, then a quadratic curve for precise slow movement.
++	auto shape = [](f32 v) {
++		f32 m = v < 0 ? -v : v;
++		if (m < 0.2f)
++			return 0.0f;
++		m = (m - 0.2f) / 0.8f;
++		return v < 0 ? -m * m : m * m;
++	};
++
++	const f32 vx = shape(PadPointerAxis[0]), vy = shape(PadPointerAxis[1]);
++	if (vx != 0.0f || vy != 0.0f) {
++		if (!g_switchPointerShown) {
++			PadPointerFX = MouseX;
++			PadPointerFY = MouseY;
++		}
++		const f32 speed = Height * 1.3f; // screen heights per second at full tilt
++		PadPointerFX = core::clamp(PadPointerFX + vx * speed * dt, 0.0f, (f32)Width - 1);
++		PadPointerFY = core::clamp(PadPointerFY + vy * speed * dt, 0.0f, (f32)Height - 1);
++		MouseX = static_cast<s32>(PadPointerFX);
++		MouseY = static_cast<s32>(PadPointerFY);
++		g_switchPointerShown = true;
++
++		SEvent ev{};
++		ev.EventType = EET_MOUSE_INPUT_EVENT;
++		ev.MouseInput.Event = EMIE_MOUSE_MOVED;
++		ev.MouseInput.X = MouseX;
++		ev.MouseInput.Y = MouseY;
++		ev.MouseInput.ButtonStates = MouseButtonStates;
++		postEventFromUser(ev);
++	}
++
++	const f32 w = shape(PadPointerAxis[3]);
++	const f32 aw = w < 0 ? -w : w;
++	if (w != 0.0f && now - PadPointerLastWheel > (u32)(180 - 140 * aw)) {
++		PadPointerLastWheel = now;
++		g_switchPointerShown = true;
++		SEvent ev{};
++		ev.EventType = EET_MOUSE_INPUT_EVENT;
++		ev.MouseInput.Event = EMIE_MOUSE_WHEEL;
++		ev.MouseInput.Wheel = w < 0 ? 1.0f : -1.0f; // stick up = scroll up
++		ev.MouseInput.X = MouseX;
++		ev.MouseInput.Y = MouseY;
++		ev.MouseInput.ButtonStates = MouseButtonStates;
++		postEventFromUser(ev);
++	}
++
++	g_switchPointerX = MouseX;
++	g_switchPointerY = MouseY;
++}
++#endif
++
+ bool CIrrDeviceSDL::run()
+ {
+ 	os::Timer::tick();
+@@ -1012,6 +1148,9 @@ bool CIrrDeviceSDL::run()
+ 			break;
+ 
+ 		case SDL_EVENT_FINGER_DOWN:
++#ifdef __SWITCH__
++			g_switchPointerShown = false; // touch takes over from the pad pointer
++#endif
+ 			irrevent.EventType = EET_TOUCH_INPUT_EVENT;
+ 			irrevent.TouchInput.Event = ETIE_PRESSED_DOWN;
+ 			get_touch_id_x_y();
+@@ -1104,6 +1243,10 @@ bool CIrrDeviceSDL::run()
+ 
+ 		case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+ 		case SDL_EVENT_GAMEPAD_BUTTON_UP: {
++#ifdef __SWITCH__
++			if (switchPadPointerEvent(SDL_event))
++				break;
++#endif
+ 			irrevent.EventType = EET_GAMEPAD_BUTTON_EVENT;
+ #ifdef _IRR_USE_SDL3_
+ 			auto id = SDL_event.gbutton.which;
+@@ -1120,6 +1263,10 @@ bool CIrrDeviceSDL::run()
+ 		}
+ 
+ 		case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
++#ifdef __SWITCH__
++			if (switchPadPointerEvent(SDL_event))
++				break;
++#endif
+ 			irrevent.EventType = EET_GAMEPAD_AXIS_EVENT;
+ #if _IRR_USE_SDL3_
+ 			auto id = SDL_event.gaxis.which;
+@@ -1143,6 +1290,9 @@ bool CIrrDeviceSDL::run()
+ 		resetReceiveTextInputEvents();
+ 	} // end while
+ 
++#ifdef __SWITCH__
++	switchPadPointerUpdate();
++#endif
+ 	return !Close;
+ }
+ 
+diff --git a/irr/src/CIrrDeviceSDL.h b/irr/src/CIrrDeviceSDL.h
+index b2d9baa..7b74127 100644
+--- a/irr/src/CIrrDeviceSDL.h
++++ b/irr/src/CIrrDeviceSDL.h
+@@ -312,6 +312,16 @@ class CIrrDeviceSDL : public CIrrDeviceStub
+ 	SDL_Gamepad *getRecentGamepad() const;
+ #endif // _IRR_COMPILE_WITH_JOYSTICK_EVENTS_
+ 
++#ifdef __SWITCH__
++	// Gamepad-driven pointer for menus (no mouse on the Switch). See run().
++	bool switchPadPointerEvent(const SDL_Event &e);
++	void switchPadPointerUpdate();
++	f32 PadPointerAxis[4] = {};
++	f32 PadPointerFX = 0.0f, PadPointerFY = 0.0f;
++	u32 PadPointerLastTime = 0, PadPointerLastWheel = 0;
++	bool PadPointerWasVisible = false;
++#endif
++
+ 	s32 MouseX, MouseY;
+ 	// these two only continue to exist for some Emscripten stuff idk about
+ 	s32 MouseXRel, MouseYRel;

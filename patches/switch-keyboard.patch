@@ -1,0 +1,119 @@
+--- a/irr/src/CIrrDeviceSDL.cpp
++++ b/irr/src/CIrrDeviceSDL.cpp
+@@ -311,6 +311,15 @@
+ 
+ void CIrrDeviceSDL::resetReceiveTextInputEvents()
+ {
++#ifdef __SWITCH__
++	// SDL's Switch port opens its keyboard inside SDL_StartTextInput(); with an
++	// edit box focused, closing it re-opens it forever. Luanti opens the system
++	// keyboard itself on click (GUIModalMenu::preprocessEvent), so never start
++	// SDL text input here.
++	if (SDL_TextInputActive(Window))
++		SDL_StopTextInput(Window);
++	return;
++#endif
+ 	gui::IGUIElement *elem = GUIEnvironment->getFocus();
+ 	if (elem && elem->acceptsIME()) {
+ 		// IBus seems to have an issue where dead keys and compose keys do not
+--- a/src/gui/modalMenu.h
++++ b/src/gui/modalMenu.h
+@@ -56,6 +56,10 @@
+ 	virtual void getAndroidUIInput() {};
+ 	porting::AndroidDialogState getAndroidUIInputState();
+ #endif
++#ifdef __SWITCH__
++	// Called after the system keyboard changed an edit box's text.
++	virtual void onSwitchTextEdited(gui::IGUIElement *box, const std::string &field_name) {}
++#endif
+ 
+ protected:
+ 	virtual std::wstring getLabelByID(s32 id) = 0;
+--- a/src/gui/modalMenu.cpp
++++ b/src/gui/modalMenu.cpp
+@@ -11,6 +11,9 @@
+ #include "gui/guiInventoryList.h"
+ #include "porting.h"
+ #include "settings.h"
++#ifdef __SWITCH__
++#include "util/string.h"
++#endif
+ 
+ PointerAction PointerAction::fromEvent(const SEvent &event) {
+ 	switch (event.EventType) {
+@@ -232,6 +235,37 @@
+ 
+ bool GUIModalMenu::preprocessEvent(const SEvent &event)
+ {
++#ifdef __SWITCH__
++	// Clicking/tapping an edit box opens the system keyboard (blocking) and
++	// puts the result into the box. Cancelling leaves the text unchanged.
++	if (event.EventType == EET_MOUSE_INPUT_EVENT &&
++			event.MouseInput.Event == EMIE_LMOUSE_PRESSED_DOWN) {
++		gui::IGUIElement *hovered =
++			Environment->getRootGUIElement()->getElementFromPoint(
++				core::position2d<s32>(event.MouseInput.X, event.MouseInput.Y));
++		if (hovered && hovered->getType() == gui::EGUIET_EDIT_BOX &&
++				hovered->isEnabled()) {
++			bool retval = hovered->OnEvent(event);
++			if (retval)
++				Environment->setFocus(hovered);
++
++			std::string field_name = getNameByID(hovered->getID());
++			// read-only field
++			if (field_name.empty())
++				return retval;
++
++			auto *box = static_cast<gui::IGUIEditBox *>(hovered);
++			int type = box->isPasswordBox() ? 2 : box->isMultiLineEnabled() ? 1 : 0;
++			std::vector<char> text(16 * 1024);
++			if (switch_keyboard_show(wide_to_utf8(box->getText()).c_str(), type,
++					text.data(), text.size())) {
++				box->setText(utf8_to_wide(text.data()).c_str());
++				onSwitchTextEdited(box, field_name);
++			}
++			return true;
++		}
++	}
++#endif
+ #ifdef __ANDROID__
+ 	// display software keyboard when clicking edit boxes
+ 	if (event.EventType == EET_MOUSE_INPUT_EVENT &&
+--- a/src/gui/guiFormSpecMenu.h
++++ b/src/gui/guiFormSpecMenu.h
+@@ -314,6 +314,9 @@
+ #ifdef __ANDROID__
+ 	void getAndroidUIInput() override;
+ #endif
++#ifdef __SWITCH__
++	void onSwitchTextEdited(gui::IGUIElement *box, const std::string &field_name) override;
++#endif
+ 
+ 	// Returns the fixed formspec coordinate size for the given parameters.
+ 	static double getFixedImgsize(double screen_dpi, double gui_scaling);
+--- a/src/gui/guiFormSpecMenu.cpp
++++ b/src/gui/guiFormSpecMenu.cpp
+@@ -3670,6 +3670,23 @@
+ }
+ #endif
+ 
++#ifdef __SWITCH__
++void GUIFormSpecMenu::onSwitchTextEdited(gui::IGUIElement *box, const std::string &field_name)
++{
++	// Same as Android: fields with "enter after edit" (e.g. search boxes)
++	// get an Enter event once the text was entered.
++	auto iter = field_enter_after_edit.find(field_name);
++	if (iter == field_enter_after_edit.end() || !iter->second || !box->getParent())
++		return;
++	SEvent enter{};
++	enter.EventType = EET_GUI_EVENT;
++	enter.GUIEvent.Caller = box;
++	enter.GUIEvent.Element = nullptr;
++	enter.GUIEvent.EventType = gui::EGET_EDITBOX_ENTER;
++	box->getParent()->OnEvent(enter);
++}
++#endif
++
+ GUIInventoryList::ItemSpec GUIFormSpecMenu::getItemAtPos(v2s32 p) const
+ {
+ 	for (const GUIInventoryList *e : m_inventorylists) {
