@@ -1,30 +1,702 @@
-diff --git a/src/script/cpp_api/s_base.cpp b/src/script/cpp_api/s_base.cpp
-index 7ff8259..99c6ae0 100644
---- a/src/script/cpp_api/s_base.cpp
-+++ b/src/script/cpp_api/s_base.cpp
-@@ -103,6 +103,25 @@ ScriptApiBase::ScriptApiBase(ScriptingType type):
- 	else
- 		luaL_openlibs(m_luastack);
+diff --git a/src/Makefile b/src/Makefile
+index bac0341e..a83a5da1 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -172,6 +172,16 @@ else
+   endif
+ endif
  
-+#if defined(__SWITCH__) && USE_LUAJIT
-+	// The Switch build's LuaJIT is interpreter-only, which has no jit.opt.
-+	// Some games (VoxeLibre's tune_jit.lua) call jit.opt.start() whenever LuaJIT
-+	// is present and crash without it; provide a no-op (nothing to tune).
-+	lua_getglobal(m_luastack, "jit");
-+	if (lua_istable(m_luastack, -1)) {
-+		lua_getfield(m_luastack, -1, "opt");
-+		bool has_opt = !lua_isnil(m_luastack, -1);
-+		lua_pop(m_luastack, 1);
-+		if (!has_opt) {
-+			lua_newtable(m_luastack);
-+			lua_pushcfunction(m_luastack, [](lua_State *) -> int { return 0; });
-+			lua_setfield(m_luastack, -2, "start");
-+			lua_setfield(m_luastack, -2, "opt");
-+		}
-+	}
-+	lua_pop(m_luastack, 1);
++ifeq (Switch,$(TARGET_SYS))
++  ifeq ($(strip $(DEVKITPRO)),)
++    $(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>/devkitpro")
++  endif
++  HOST_CC:= $(CC)
++  CROSS:= $(DEVKITPRO)/devkitA64/bin/aarch64-none-elf-
++  BUILDMODE= static
++  TARGET_FLAGS:= -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE --sysroot $(DEVKITPRO)/devkitA64/aarch64-none-elf -DLJ_NO_SYSTEM=1 -DLUAJIT_NO_LOG2=1 -DLJ_TARGET_SWITCH=1 -I$(DEVKITPRO)/libnx/include/ -DLUAJIT_USE_SYSMALLOC -L$(DEVKITPRO)/libnx/lib -DLJ_HASPROFILE=0 -D__SWITCH__=1 -specs=$(DEVKITPRO)/libnx/switch.specs
++endif
++
+ ##############################################################################
+ # Flags and options for host and target.
+ ##############################################################################
+@@ -357,6 +367,9 @@ else
+   ifeq (GNU,$(TARGET_SYS))
+     TARGET_XLIBS+= -ldl
+   endif
++  ifeq (Switch,$(TARGET_SYS))
++    TARGET_XLIBS+= -lnx
++  endif
+ endif
+ endif
+ endif
+@@ -373,12 +386,16 @@ ifneq ($(HOST_SYS),$(TARGET_SYS))
+   else
+   ifeq (iOS,$(TARGET_SYS))
+     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OSX -DTARGET_OS_IPHONE=1
++  else
++  ifeq (Switch,$(TARGET_SYS))
++    HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OTHER -DLJ_TARGET_SWITCH=1
+   else
+     HOST_XCFLAGS+= -DLUAJIT_OS=LUAJIT_OS_OTHER
+   endif
+   endif
+   endif
+   endif
++  endif
+ endif
+ 
+ ifneq (,$(CCDEBUG))
+diff --git a/src/lj_asm.c b/src/lj_asm.c
+index 4818c68d..bd780697 100644
+--- a/src/lj_asm.c
++++ b/src/lj_asm.c
+@@ -2624,7 +2624,7 @@ void lj_asm_trace(jit_State *J, GCtrace *T)
+     lj_trace_err(as->J, LJ_TRERR_BADRA);  /* Ouch! Should never happen. */
+ 
+   /* Set trace entry point before fixing up tail to allow link to self. */
+-  T->mcode = as->mcp;
++  T->mcode = mcode_rx(J, as->mcp);
+   T->mcloop = as->mcloop ? (MSize)((char *)as->mcloop - (char *)as->mcp) : 0;
+   if (as->loopref)
+     asm_loop_tail_fixup(as);
+@@ -2635,7 +2635,7 @@ void lj_asm_trace(jit_State *J, GCtrace *T)
+ #if LJ_TARGET_MCODE_FIXUP
+   asm_mcode_fixup(T->mcode, T->szmcode);
+ #endif
+-  lj_mcode_sync(T->mcode, as->mctoporig);
++  lj_mcode_sync_rx(J, T->mcode, mcode_rx(J, as->mctoporig));
+ }
+ 
+ #undef IR
+diff --git a/src/lj_asm_arm64.h b/src/lj_asm_arm64.h
+index dfc5490f..d8f41236 100644
+--- a/src/lj_asm_arm64.h
++++ b/src/lj_asm_arm64.h
+@@ -56,7 +56,7 @@ static void asm_exitstub_setup(ASMState *as, ExitNo nexits)
+   MCode *mxp = as->mctop;
+   if (mxp - (nexits + 4 + MCLIM_REDZONE) < as->mclim)
+     asm_mclimit(as);
+-  ind = !A64F_S_OK(target - (mxp - nexits - 2), 26);
++  ind = !A64F_S_OK(target - mcode_rx(as->J, mxp - nexits - 2), 26);
+   /* !ind: 1: str lr,[sp]; bl ->vm_exit_handler; movz w0,traceno;
+   **  ind: 1: str lr,[sp]; ldr lr, [gl, K64_VXH]; blr lr; movz w0,traceno;
+   **          bl <1; bl <1; ...
+@@ -70,7 +70,7 @@ static void asm_exitstub_setup(ASMState *as, ExitNo nexits)
+     *--mxp = A64I_LE(A64I_LDRx | A64F_D(RID_LR) | A64F_N(RID_GL) | A64F_U12(glofs(as, &as->J->k64[LJ_K64_VM_EXIT_HANDLER]) >> 3));
+   } else {
+     mxp--;
+-    *mxp = A64I_LE(A64I_BL | A64F_S26(target-mxp));
++    *mxp = A64I_LE(A64I_BL | A64F_S26(target - mcode_rx(as->J, mxp)));
+   }
+   *--mxp = A64I_LE(A64I_STRx | A64F_D(RID_LR) | A64F_N(RID_SP));
+   as->mctop = mxp;
+@@ -1945,8 +1945,8 @@ static void asm_tail_fixup(ASMState *as, TraceNo lnk)
+   }
+   /* Emit exit branch. */
+   target = lnk ? traceref(as->J, lnk)->mcode : (MCode *)(void *)lj_vm_exit_interp;
+-  if (lnk || A64F_S_OK(target - mcp, 26)) {
+-    *mcp = A64I_B | A64F_S26(target - mcp); mcp++;
++  if (lnk || A64F_S_OK(target - mcode_rx(as->J, mcp), 26)) {
++    *mcp = A64I_B | A64F_S26(target - mcode_rx(as->J, mcp)); mcp++;
+   } else {
+     *mcp++ = A64I_LDRx | A64F_D(RID_LR) | A64F_N(RID_GL) | A64F_U12(glofs(as, &as->J->k64[LJ_K64_VM_EXIT_INTERP]) >> 3);
+     *mcp++ = A64I_BR_AUTH | A64F_N(RID_LR);
+@@ -1963,7 +1963,8 @@ static void asm_tail_prep(ASMState *as, TraceNo lnk)
+   } else {
+     if (!lnk) {
+       MCode *target = (MCode *)(void *)lj_vm_exit_interp;
+-      if (!A64F_S_OK(target - p, 26) || !A64F_S_OK(target - (p+1), 26)) p--;
++      MCode *rx_p = mcode_rx(as->J, p);
++      if (!A64F_S_OK(target - rx_p, 26) || !A64F_S_OK(target - (rx_p+1), 26)) p--;
+     }
+     p--;  /* Leave room for stack pointer adjustment. */
+     as->mcp = p;
+@@ -2048,41 +2049,42 @@ void lj_asm_patchexit(jit_State *J, GCtrace *T, ExitNo exitno, MCode *target)
+   MCode *p = T->mcode;
+   MCode *pe = (MCode *)((char *)p + T->szmcode);
+   MCode *cstart = NULL;
+-  MCode *mcarea = lj_mcode_patch(J, p, 0);
+   MCode *px = exitstub_trace_addr(T, exitno);
++  MCode *mcarea = lj_mcode_patch(J, p, 0);
+   int patchlong = 1;
+   /* Note: this assumes a trace exit is only ever patched once. */
+   for (; p < pe; p++) {
+     /* Look for exitstub branch, replace with branch to target. */
++    MCode *pw = mcode_rw(J, p);
+     ptrdiff_t delta = target - p;
+-    MCode ins = A64I_LE(*p);
++    MCode ins = A64I_LE(*pw);
+     if ((ins & 0xff000000u) == 0x54000000u &&
+ 	((ins ^ ((px-p)<<5)) & 0x00ffffe0u) == 0) {
+       /* Patch bcc, if within range. */
+       if (A64F_S_OK(delta, 19)) {
+-	*p = A64I_LE((ins & 0xff00001fu) | A64F_S19(delta));
++	*pw = A64I_LE((ins & 0xff00001fu) | A64F_S19(delta));
+ 	if (!cstart) cstart = p;
+       }
+     } else if ((ins & 0xfc000000u) == 0x14000000u &&
+ 	       ((ins ^ (px-p)) & 0x03ffffffu) == 0) {
+       /* Patch b. */
+       lj_assertJ(A64F_S_OK(delta, 26), "branch target out of range");
+-      *p = A64I_LE((ins & 0xfc000000u) | A64F_S26(delta));
++      *pw = A64I_LE((ins & 0xfc000000u) | A64F_S26(delta));
+       if (!cstart) cstart = p;
+     } else if ((ins & 0x7e000000u) == 0x34000000u &&
+ 	       ((ins ^ ((px-p)<<5)) & 0x00ffffe0u) == 0) {
+       /* Patch cbz/cbnz, if within range. */
+-      if (p[-1] == ARM64_NOPATCH_GC_CHECK) {
++      if (pw[-1] == ARM64_NOPATCH_GC_CHECK) {
+ 	patchlong = 0;
+       } else if (A64F_S_OK(delta, 19)) {
+-	*p = A64I_LE((ins & 0xff00001fu) | A64F_S19(delta));
++	*pw = A64I_LE((ins & 0xff00001fu) | A64F_S19(delta));
+ 	if (!cstart) cstart = p;
+       }
+     } else if ((ins & 0x7e000000u) == 0x36000000u &&
+ 	       ((ins ^ ((px-p)<<5)) & 0x0007ffe0u) == 0) {
+       /* Patch tbz/tbnz, if within range. */
+       if (A64F_S_OK(delta, 14)) {
+-	*p = A64I_LE((ins & 0xfff8001fu) | A64F_S14(delta));
++	*pw = A64I_LE((ins & 0xfff8001fu) | A64F_S14(delta));
+ 	if (!cstart) cstart = p;
+       }
+     }
+@@ -2091,10 +2093,10 @@ void lj_asm_patchexit(jit_State *J, GCtrace *T, ExitNo exitno, MCode *target)
+   if (patchlong) {
+     ptrdiff_t delta = target - px;
+     lj_assertJ(A64F_S_OK(delta, 26), "branch target out of range");
+-    *px = A64I_B | A64F_S26(delta);
++    *mcode_rw(J, px) = A64I_B | A64F_S26(delta);
+     if (!cstart) cstart = px;
+   }
+-  if (cstart) lj_mcode_sync(cstart, px+1);
++  if (cstart) lj_mcode_sync_rx(J, cstart, px+1);
+   lj_mcode_patch(J, mcarea, 1);
+ }
+ 
+diff --git a/src/lj_ccallback.c b/src/lj_ccallback.c
+index 724dea60..6cf95ba8 100644
+--- a/src/lj_ccallback.c
++++ b/src/lj_ccallback.c
+@@ -292,6 +292,11 @@ static void *callback_mcode_init(global_State *g, uint32_t *page)
+ #define CCMAP_CREATE	0
+ #endif
+ 
++#elif LJ_TARGET_SWITCH
++
++#include <switch/result.h>
++#include <switch/kernel/jit.h>
++
+ #endif
+ 
+ /* Allocate and initialize area for callback function pointers. */
+@@ -313,11 +318,29 @@ static void callback_mcode_new(CTState *cts)
+ #if CCMAP_CREATE
+   pthread_jit_write_protect_np(0);
+ #endif
++#elif LJ_TARGET_SWITCH
++  {
++    Jit *jit = lj_mem_newt(cts->L, sizeof(Jit), Jit);
++    if (R_FAILED(jitCreate(jit, sz))) {
++      lj_mem_freet(cts->g, jit);
++      lj_err_caller(cts->L, LJ_ERR_FFI_CBACKOV);
++    }
++    if (R_FAILED(jitTransitionToWritable(jit))) {
++      jitClose(jit);
++      lj_mem_freet(cts->g, jit);
++      lj_err_caller(cts->L, LJ_ERR_FFI_CBACKOV);
++    }
++    cts->cb.mcode_jit = jit;
++    cts->cb.mcode = jitGetRxAddr(jit);
++    p = jitGetRwAddr(jit);
++  }
+ #else
+   /* Fallback allocator. Fails if memory is not executable by default. */
+   p = lj_mem_new(cts->L, sz);
+ #endif
++#if !LJ_TARGET_SWITCH
+   cts->cb.mcode = p;
++#endif
+   pe = callback_mcode_init(cts->g, p);
+   UNUSED(pe);
+   lj_assertCTS((size_t)((char *)pe - (char *)p) <= sz,
+@@ -334,6 +357,11 @@ static void callback_mcode_new(CTState *cts)
+ #else
+   mprotect(p, sz, (PROT_READ|PROT_EXEC));
+ #endif
++#elif LJ_TARGET_SWITCH
++  if (R_FAILED(jitTransitionToExecutable((Jit *)cts->cb.mcode_jit))) {
++    lj_ccallback_mcode_free(cts);
++    lj_err_caller(cts->L, LJ_ERR_FFI_CBACKOV);
++  }
+ #endif
+ }
+ 
+@@ -348,6 +376,17 @@ void lj_ccallback_mcode_free(CTState *cts)
+   UNUSED(sz);
+ #elif LJ_TARGET_POSIX
+   munmap(p, sz);
++#elif LJ_TARGET_SWITCH
++  {
++    Jit *jit = (Jit *)cts->cb.mcode_jit;
++    UNUSED(sz);
++    if (jit) {
++      jitClose(jit);
++      lj_mem_freet(cts->g, jit);
++      cts->cb.mcode_jit = NULL;
++    }
++    cts->cb.mcode = NULL;
++  }
+ #else
+   lj_mem_free(cts->g, p, sz);
+ #endif
+diff --git a/src/lj_ctype.h b/src/lj_ctype.h
+index 43d507b1..cdd2c26b 100644
+--- a/src/lj_ctype.h
++++ b/src/lj_ctype.h
+@@ -168,6 +168,9 @@ typedef LJ_ALIGN(8) struct CCallback {
+   MSize sizeid;			/* Size of callback type table. */
+   MSize topid;			/* Highest unused callback type table slot. */
+   MSize slot;			/* Current callback slot. */
++#if LJ_TARGET_SWITCH
++  void *mcode_jit;		/* libnx Jit handle for callback mcode. */
++#endif
+ } CCallback;
+ 
+ /* C type state. */
+diff --git a/src/lj_emit_arm64.h b/src/lj_emit_arm64.h
+index 481e49c6..21cfd5b0 100644
+--- a/src/lj_emit_arm64.h
++++ b/src/lj_emit_arm64.h
+@@ -212,7 +212,7 @@ static int emit_kdelta(ASMState *as, Reg rd, uint64_t k, int is64)
+ #define glofs(as, k) \
+   ((intptr_t)((uintptr_t)(k) - (uintptr_t)&J2GG(as->J)->g))
+ #define mcpofs(as, k) \
+-  ((intptr_t)((uintptr_t)(k) - (uintptr_t)(as->mcp - 1)))
++  ((intptr_t)((uintptr_t)(k) - (uintptr_t)mcode_rx(as->J, as->mcp - 1)))
+ #define checkmcpofs(as, k) \
+   (A64F_S_OK(mcpofs(as, k)>>2, 19))
+ 
+@@ -223,7 +223,7 @@ static int emit_kadrp(ASMState *as, Reg rd, uint64_t k)
+   int64_t ofs = mcpofs(as, k);
+   if (!A64F_S_OK((uint64_t)ofs, 21)) {
+     uint64_t kpage = k & ~0xfffull;
+-    MCode *adrp = as->mcp - 1 - (k != kpage);
++    MCode *adrp = mcode_rx(as->J, as->mcp - 1 - (k != kpage));
+     ofs = (int64_t)(kpage - ((uint64_t)adrp & ~0xfffull)) >> 12;
+     if (!A64F_S_OK(ofs, 21))
+       return 0;  /* Failed. */
+@@ -399,7 +399,7 @@ static void emit_call(ASMState *as, ASMFunction target)
+ #else
+   char *targetp = (char *)target;
+ #endif
+-  ptrdiff_t delta = targetp - (char *)p;
++  ptrdiff_t delta = targetp - (char *)mcode_rx(as->J, p);
+   if (A64F_S_OK(delta>>2, 26)) {
+     *p = A64I_BL | A64F_S26(delta>>2);
+   } else {  /* Target out of range: need indirect call. But don't use R0-R7. */
+diff --git a/src/lj_err.c b/src/lj_err.c
+index d2cffb0d..be0274a9 100644
+--- a/src/lj_err.c
++++ b/src/lj_err.c
+@@ -601,9 +601,20 @@ static const uint8_t err_frame_jit_template[] = {
+ extern void __register_frame(const void *);
+ extern void __deregister_frame(const void *);
+ 
++#if LJ_TARGET_SWITCH
++#include <switch/arm/cache.h>
++
++uint8_t *lj_err_register_mcode(void *base, size_t sz, uint8_t *info, ptrdiff_t delta)
++#else
+ uint8_t *lj_err_register_mcode(void *base, size_t sz, uint8_t *info)
++#endif
+ {
+   ASMFunction handler = (ASMFunction)err_unwind_jit;
++#if LJ_TARGET_SWITCH
++  uint8_t *rx_info = info - delta;
++#else
++  uint8_t *rx_info = info;
++#endif
+   memcpy(info, err_frame_jit_template, sizeof(err_frame_jit_template));
+ #if LJ_ABI_PAUTH
+ #if LJ_TARGET_ARM64
+@@ -617,23 +628,35 @@ uint8_t *lj_err_register_mcode(void *base, size_t sz, uint8_t *info)
+   memcpy(info + ERR_FRAME_JIT_OFS_HANDLER, &handler, sizeof(handler));
+   *(uint32_t *)(info + ERR_FRAME_JIT_OFS_CODE_SIZE) =
+     (uint32_t)(sz - sizeof(err_frame_jit_template) - (info - (uint8_t *)base));
+-  __register_frame(info + ERR_FRAME_JIT_OFS_REGISTER);
++#if LJ_TARGET_SWITCH
++  /* Ensure the RX alias sees the FDE before libgcc parses it. */
++  armDCacheFlush(info, sizeof(err_frame_jit_template));
++#endif
++  __register_frame(rx_info + ERR_FRAME_JIT_OFS_REGISTER);
+ #ifdef LUA_USE_ASSERT
+   {
+     struct dwarf_eh_bases ehb;
+-    lj_assertX(_Unwind_Find_FDE(info + sizeof(err_frame_jit_template)+1, &ehb),
++    lj_assertX(_Unwind_Find_FDE(rx_info + sizeof(err_frame_jit_template)+1, &ehb),
+ 	       "bad JIT unwind table registration");
+   }
+ #endif
+   return info + sizeof(err_frame_jit_template);
+ }
+ 
++#if LJ_TARGET_SWITCH
++void lj_err_deregister_mcode(void *base, size_t sz, uint8_t *info, ptrdiff_t delta)
++{
++  UNUSED(base); UNUSED(sz);
++  __deregister_frame((info - delta) + ERR_FRAME_JIT_OFS_REGISTER);
++}
++#else
+ void lj_err_deregister_mcode(void *base, size_t sz, uint8_t *info)
+ {
+   UNUSED(base); UNUSED(sz);
+   __deregister_frame(info + ERR_FRAME_JIT_OFS_REGISTER);
+ }
+ #endif
++#endif
+ 
+ #else /* LJ_TARGET_ARM */
+ 
+diff --git a/src/lj_err.h b/src/lj_err.h
+index 9b8fc8d2..3428abad 100644
+--- a/src/lj_err.h
++++ b/src/lj_err.h
+@@ -43,12 +43,22 @@ LJ_FUNC_NORET void lj_err_argtype(lua_State *L, int narg, const char *xname);
+ LJ_FUNC_NORET void lj_err_argt(lua_State *L, int narg, int tt);
+ 
+ #if LJ_UNWIND_JIT && !LJ_ABI_WIN
++#if LJ_TARGET_SWITCH
++LJ_FUNC uint8_t *lj_err_register_mcode(void *base, size_t sz, uint8_t *info, ptrdiff_t delta);
++LJ_FUNC void lj_err_deregister_mcode(void *base, size_t sz, uint8_t *info, ptrdiff_t delta);
++#else
+ LJ_FUNC uint8_t *lj_err_register_mcode(void *base, size_t sz, uint8_t *info);
+ LJ_FUNC void lj_err_deregister_mcode(void *base, size_t sz, uint8_t *info);
++#endif
++#else
++#if LJ_TARGET_SWITCH
++#define lj_err_register_mcode(base, sz, info, delta)	(info)
++#define lj_err_deregister_mcode(base, sz, info, delta)	UNUSED(base)
+ #else
+ #define lj_err_register_mcode(base, sz, info)	(info)
+ #define lj_err_deregister_mcode(base, sz, info)	UNUSED(base)
+ #endif
++#endif
+ 
+ #if LJ_UNWIND_EXT && !LJ_ABI_WIN && defined(LUA_USE_ASSERT)
+ LJ_FUNC void lj_err_verify(void);
+diff --git a/src/lj_jit.h b/src/lj_jit.h
+index af50e5c1..52e7f9b4 100644
+--- a/src/lj_jit.h
++++ b/src/lj_jit.h
+@@ -509,6 +509,9 @@ typedef struct jit_State {
+   size_t szmcarea;	/* Size of current mcode area. */
+   size_t szallmcarea;	/* Total size of all allocated mcode areas. */
+   uintptr_t mcmin, mcmax;	/* Mcode allocation range. */
++#if LJ_TARGET_SWITCH
++  ptrdiff_t mcdelta;	/* Offset from RX to RW view (rw - rx). */
++#endif
+ 
+   TValue errinfo;	/* Additional info element for trace errors. */
+ 
+@@ -519,6 +522,14 @@ typedef struct jit_State {
+ #endif
+ } jit_State;
+ 
++#if LJ_TARGET_SWITCH
++#define mcode_rx(J, p)	((MCode *)((char *)(p) - (J)->mcdelta))
++#define mcode_rw(J, p)	((MCode *)((char *)(p) + (J)->mcdelta))
++#else
++#define mcode_rx(J, p)	(p)
++#define mcode_rw(J, p)	(p)
 +#endif
 +
- 	// Load bit library
- 	lua_pushcfunction(m_luastack, luaopen_bit);
- 	lua_pushstring(m_luastack, LUA_BITLIBNAME);
+ #ifdef LUA_USE_ASSERT
+ #define lj_assertJ(c, ...)	lj_assertG_(J2G(J), (c), __VA_ARGS__)
+ #else
+diff --git a/src/lj_mcode.c b/src/lj_mcode.c
+index edcc4bd9..aea90745 100644
+--- a/src/lj_mcode.c
++++ b/src/lj_mcode.c
+@@ -52,6 +52,9 @@ void lj_mcode_sync(void *start, void *end)
+   sys_icache_invalidate(start, (char *)end-(char *)start);
+ #elif LJ_TARGET_PPC
+   lj_vm_cachesync(start, end);
++#elif LJ_TARGET_SWITCH
++  /* Cache flush and invalidation happen in jitTransitionToExecutable(). */
++  UNUSED(start); UNUSED(end);
+ #elif defined(__GNUC__) || defined(__clang__)
+   __clear_cache(start, end);
+ #else
+@@ -162,6 +165,117 @@ static void mcode_setprot(jit_State *J, void *p, size_t sz, int prot)
+ #endif
+ }
+ 
++#elif LJ_TARGET_SWITCH
++
++#include <switch/result.h>
++#include <switch/arm/cache.h>
++#include <switch/kernel/jit.h>
++#include <switch/kernel/svc.h>
++
++#define MCPROT_RW	Perm_Rw
++#define MCPROT_RX	Perm_Rx
++#define MCPROT_RWX	Perm_Rx
++
++typedef struct SwitchMCArea {
++  MCLink link;
++  Jit jit;
++} SwitchMCArea;
++
++static void mcode_setprot(jit_State *J, void *p, size_t sz, int prot)
++{
++  SwitchMCArea *area = (SwitchMCArea *)p;
++  Result rc;
++  UNUSED(sz);
++  /* CodeMemory keeps both views mapped; sync only modified ranges instead. */
++  if (area->jit.type == JitType_CodeMemory)
++    return;
++  rc = (prot == MCPROT_RX) ? jitTransitionToExecutable(&area->jit)
++			   : jitTransitionToWritable(&area->jit);
++#if LUAJIT_SECURITY_MCODE != 0
++  if (R_FAILED(rc)) mcode_protfail(J);
++#else
++  UNUSED(J); UNUSED(rc);
++#endif
++}
++
++static void switch_dcache_clean_pou(void *addr, size_t size)
++{
++  uint64_t ctr, step;
++  uintptr_t p, end;
++  __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(ctr));
++  step = (uint64_t)4u << ((ctr >> 16) & 0xfu);
++  p = (uintptr_t)addr & ~(uintptr_t)(step - 1u);
++  end = (uintptr_t)addr + size;
++  for (; p < end; p += step)
++    __asm__ __volatile__("dc cvau, %0" :: "r"(p) : "memory");
++  __asm__ __volatile__("dsb ish" ::: "memory");
++}
++
++void lj_mcode_sync_rx(jit_State *J, void *start, void *end)
++{
++  SwitchMCArea *area = (SwitchMCArea *)J->mcarea;
++  if (area && area->jit.type == JitType_CodeMemory && end > start) {
++    size_t len = (size_t)((char *)end - (char *)start);
++    void *rw = (char *)start + J->mcdelta;
++    switch_dcache_clean_pou(rw, len);
++    armICacheInvalidate(start, len);
++  }
++}
++
++/* Try to relocate the RX view within +-120 MB of target for direct BL/B. */
++static void switch_relocate_rx_near(Jit *jit, uintptr_t target)
++{
++  const uintptr_t max_dist = 0x07800000u; /* 120 MB (< ARM64 128 MB B/BL limit) */
++  const uintptr_t guard = 0x1000u;
++  uintptr_t lo = target > max_dist ? (target - max_dist) : 0x10000u;
++  uintptr_t hi = target + max_dist;
++  void *orig_rx = jit->rx_addr;
++  uintptr_t rx = (uintptr_t)orig_rx;
++  if (jit->type != JitType_CodeMemory)
++    return;
++  if (rx >= lo && rx + jit->size <= hi)
++    return;
++  virtmemLock();
++  if (R_SUCCEEDED(svcControlCodeMemory(jit->handle, CodeMapOperation_UnmapSlave,
++				       orig_rx, jit->size, Perm_None))) {
++    uintptr_t probe = (target + 0x10000u) & ~(uintptr_t)0xfffu;
++    int pass;
++    for (pass = 0; pass < 2; pass++) {
++      uintptr_t limit = (pass == 0) ? hi : target;
++      if (pass == 1) probe = lo & ~(uintptr_t)0xfffu;
++      while (probe + jit->size <= limit) {
++	MemoryInfo info;
++	u32 pageinfo;
++	if (R_FAILED(svcQueryMemory(&info, &pageinfo, probe)))
++	  break;
++	if (info.type == MemType_Unmapped) {
++	  uintptr_t base = (info.addr + guard + 0xffffu) & ~(uintptr_t)0xffffu;
++	  uintptr_t end = info.addr + info.size;
++	  if (base < probe) base = (probe + 0xffffu) & ~(uintptr_t)0xffffu;
++	  if (base >= lo && base + jit->size + guard <= end &&
++	      base + jit->size <= limit) {
++	    if (R_SUCCEEDED(svcControlCodeMemory(jit->handle,
++						 CodeMapOperation_MapSlave,
++						 (void *)base, jit->size,
++						 Perm_Rx))) {
++	      jit->rx_addr = (void *)base;
++	      virtmemUnlock();
++	      return;
++	    }
++	  }
++	}
++	if (info.addr + info.size <= probe)
++	  break;
++	probe = info.addr + info.size;
++      }
++    }
++    /* No nearby slot available; restore original RX mapping. */
++    svcControlCodeMemory(jit->handle, CodeMapOperation_MapSlave,
++			 orig_rx, jit->size, Perm_Rx);
++  }
++  virtmemUnlock();
++}
++
+ #else
+ 
+ #error "Missing OS support for explicit placement of executable memory"
+@@ -213,7 +327,7 @@ static void *mcode_alloc_at_TEST(jit_State *J, uintptr_t hint, size_t sz, int pr
+ 
+ /* -- MCode area protection ----------------------------------------------- */
+ 
+-#if LUAJIT_SECURITY_MCODE == 0
++#if LUAJIT_SECURITY_MCODE == 0 && !LJ_TARGET_SWITCH
+ 
+ /* Define this ONLY if page protection twiddling becomes a bottleneck.
+ **
+@@ -261,6 +375,7 @@ static void mcode_protect(jit_State *J, int prot)
+ 
+ /* -- MCode area allocation ----------------------------------------------- */
+ 
++#if !LJ_TARGET_SWITCH
+ #ifdef LJ_TARGET_JUMPRANGE
+ 
+ #define MCODE_RANGE64	((1u << LJ_TARGET_JUMPRANGE) - 0x10000u)
+@@ -351,9 +466,66 @@ static void *mcode_alloc(jit_State *J, size_t sz)
+ }
+ 
+ #endif
++#endif /* !LJ_TARGET_SWITCH */
+ 
+ /* -- MCode area management ----------------------------------------------- */
+ 
++#if LJ_TARGET_SWITCH
++
++/* Allocate a single contiguous dual-view JIT buffer sized to maxmcode. */
++static void mcode_allocarea(jit_State *J)
++{
++  Jit jit;
++  SwitchMCArea *area;
++  void *rw, *rx;
++  size_t sz;
++  if (J->mcarea)
++    lj_trace_err(J, LJ_TRERR_MCODEAL);
++  sz = (size_t)J->param[JIT_P_maxmcode] << 10;
++  sz = (sz + 0xfffu) & ~(size_t)0xfffu;
++  if (sz < 0x10000u) sz = 0x10000u;
++  if (R_FAILED(jitCreate(&jit, sz)))
++    lj_trace_err(J, LJ_TRERR_MCODEAL);
++  if (R_FAILED(jitTransitionToWritable(&jit))) {
++    jitClose(&jit);
++    lj_trace_err(J, LJ_TRERR_MCODEAL);
++  }
++  switch_relocate_rx_near(&jit, (uintptr_t)(void *)lj_vm_exit_handler);
++  rw = jitGetRwAddr(&jit);
++  rx = jitGetRxAddr(&jit);
++  J->mcdelta = (char *)rw - (char *)rx;
++  J->mcarea = (MCode *)rw;
++  J->szmcarea = sz;
++  J->mcprot = MCPROT_GEN;
++  J->mctop = (MCode *)((char *)rw + sz);
++  J->mcbot = (MCode *)((char *)rw + sizeof(SwitchMCArea));
++  area = (SwitchMCArea *)rw;
++  area->link.next = NULL;
++  area->link.size = sz;
++  area->jit = jit;
++  J->szallmcarea = sz;
++  J->mcbot = (MCode *)lj_err_register_mcode(rw, sz, (uint8_t *)J->mcbot, J->mcdelta);
++}
++
++/* Free all MCode areas. */
++void lj_mcode_free(jit_State *J)
++{
++  MCode *mc = J->mcarea;
++  ptrdiff_t delta = J->mcdelta;
++  J->mcarea = NULL;
++  J->szallmcarea = 0;
++  J->mcdelta = 0;
++  if (mc) {
++    SwitchMCArea *area = (SwitchMCArea *)mc;
++    size_t sz = area->link.size;
++    Jit jit = area->jit;
++    lj_err_deregister_mcode(mc, sz, (uint8_t *)mc + sizeof(SwitchMCArea), delta);
++    jitClose(&jit);
++  }
++}
++
++#else
++
+ /* Allocate a new MCode area. */
+ static void mcode_allocarea(jit_State *J)
+ {
+@@ -385,6 +557,8 @@ void lj_mcode_free(jit_State *J)
+   }
+ }
+ 
++#endif
++
+ /* -- MCode transactions -------------------------------------------------- */
+ 
+ /* Reserve the remainder of the current MCode area. */
+@@ -401,7 +575,7 @@ MCode *lj_mcode_reserve(jit_State *J, MCode **lim)
+ /* Commit the top part of the current MCode area. */
+ void lj_mcode_commit(jit_State *J, MCode *top)
+ {
+-  J->mctop = top;
++  J->mctop = mcode_rw(J, top);
+   mcode_protect(J, MCPROT_RUN);
+ }
+ 
+@@ -422,7 +596,7 @@ MCode *lj_mcode_patch(jit_State *J, MCode *ptr, int finish)
+       mcode_setprot(J, ptr, ((MCLink *)ptr)->size, MCPROT_RUN);
+     return NULL;
+   } else {
+-    uintptr_t base = (uintptr_t)J->mcarea, addr = (uintptr_t)ptr;
++    uintptr_t base = (uintptr_t)J->mcarea, addr = (uintptr_t)mcode_rw(J, ptr);
+     /* Try current area first to use the protection cache. */
+     if (addr >= base && addr < base + J->szmcarea) {
+       mcode_protect(J, MCPROT_GEN);
+diff --git a/src/lj_mcode.h b/src/lj_mcode.h
+index 64320fde..1d72b999 100644
+--- a/src/lj_mcode.h
++++ b/src/lj_mcode.h
+@@ -22,6 +22,11 @@ LJ_FUNC void lj_mcode_commit(jit_State *J, MCode *m);
+ LJ_FUNC void lj_mcode_abort(jit_State *J);
+ LJ_FUNC MCode *lj_mcode_patch(jit_State *J, MCode *ptr, int finish);
+ LJ_FUNC_NORET void lj_mcode_limiterr(jit_State *J, size_t need);
++#if LJ_TARGET_SWITCH
++LJ_FUNC void lj_mcode_sync_rx(jit_State *J, void *start, void *end);
++#else
++#define lj_mcode_sync_rx(J, start, end)	lj_mcode_sync((start), (end))
++#endif
+ 
+ #define lj_mcode_commitbot(J, m)	(J->mcbot = (m))
+ 
+diff --git a/src/lj_prng.c b/src/lj_prng.c
+index 6e5a9921..ac01e724 100644
+--- a/src/lj_prng.c
++++ b/src/lj_prng.c
+@@ -15,6 +15,10 @@
+ #include "lj_arch.h"
+ #include "lj_prng.h"
+ 
++#if LJ_TARGET_SWITCH
++#include <switch/kernel/random.h>
++#endif
++
+ /* -- PRNG step function -------------------------------------------------- */
+ 
+ /* This implements a Tausworthe PRNG with period 2^223. Based on:
+@@ -236,6 +240,11 @@ int LJ_FASTCALL lj_prng_seed_secure(PRNGState *rs)
+     }
+   }
+ 
++#elif LJ_TARGET_SWITCH
++
++  randomGet(rs->u, sizeof(rs->u));
++  goto ok;
++
+ #else
+ 
+   /* Add an elif above for your OS with a secure PRNG seed.

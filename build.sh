@@ -83,7 +83,7 @@ if [ ! -f "$SYSROOT/lib/libsqlite3.a" ]; then
   aarch64-none-elf-ar rcs libsqlite3.a sqlite3.o
   $SUDO cp libsqlite3.a "$SYSROOT/lib/"
   $SUDO cp sqlite3.h "$SYSROOT/include/"
-  cd - >/dev/null
+  cd "$PROJECT_DIR"
 fi
 
 # 3b) libzip (Luanti needs >= 1.7.2): use a devkitPro package if one exists,
@@ -109,29 +109,24 @@ if [ ! -f "$SYSROOT/lib/libzip.a" ]; then
   fi
 fi
 
-# 3c) LuaJIT 2.1, interpreter only (no JIT: Horizon doesn't allow writable +
-#     executable memory the normal way) and no FFI (unused by Luanti; its callbacks
-#     generate machine code). Uses LuaJIT's console target __NX__ (no tmpfile etc.)
-#     and the system allocator. Built into the project-local deps/ (no sudo).
+# 3c) LuaJIT 2.1 with Horizon OS JIT support (patches/switch-jit-opt.patch),
+#     built via the amalgamation (LJCORE_O=ljamalg.o) with TARGET_SYS=Switch
+#     into the project-local deps/ (no sudo).
 #     Pinned to a tested commit; bump LUAJIT_COMMIT and delete deps/luajit to update.
-LUAJIT_COMMIT=2a8e017ef1ece6a95b983ffca073d30609dce7c4
+LUAJIT_COMMIT=8e6520a7aecd0517e792b359afbbfd7274791f5f
 LUAJIT_DIR="$PROJECT_DIR/deps/luajit"
 if [ ! -f "$LUAJIT_DIR/lib/libluajit-5.1.a" ]; then
-  echo ">> Building LuaJIT for Switch"
+  echo ">> Building LuaJIT for Switch (JIT enabled)"
   rm -rf /tmp/luajit-nx && mkdir /tmp/luajit-nx
   git -C /tmp/luajit-nx init -q
   git -C /tmp/luajit-nx fetch -q --depth 1 https://github.com/LuaJIT/LuaJIT.git "$LUAJIT_COMMIT"
   git -C /tmp/luajit-nx checkout -q FETCH_HEAD
-  make -C /tmp/luajit-nx/src -j"$JOBS" HOST_CC=gcc CROSS=aarch64-none-elf- \
-    TARGET_SYS=Other BUILDMODE=static TARGET_CFLAGS="$NX_CFLAGS" \
-    XCFLAGS="-D__NX__ -DLUAJIT_DISABLE_JIT -DLUAJIT_DISABLE_FFI -DLUAJIT_USE_SYSMALLOC" \
+  git -C /tmp/luajit-nx apply "$PROJECT_DIR/patches/switch-jit-opt.patch"
+  make -C /tmp/luajit-nx/src -j"$JOBS" \
+    DEVKITPRO="$DEVKITPRO" \
+    TARGET_SYS=Switch \
+    LJCORE_O=ljamalg.o \
     libluajit.a
-  # LuaJIT seeds its PRNG with getentropy(); provide newlib's missing backend
-  # inside the archive so every link of LuaJIT (incl. CMake's checks) works.
-  # shellcheck disable=SC2086
-  aarch64-none-elf-gcc $NX_CFLAGS -c "$PROJECT_DIR/stubs/switch_getentropy.c" \
-    -o /tmp/luajit-nx/src/switch_getentropy.o
-  aarch64-none-elf-ar rs /tmp/luajit-nx/src/libluajit.a /tmp/luajit-nx/src/switch_getentropy.o
   rm -rf "$LUAJIT_DIR" && mkdir -p "$LUAJIT_DIR/lib" "$LUAJIT_DIR/include/luajit-2.1"
   cp /tmp/luajit-nx/src/libluajit.a "$LUAJIT_DIR/lib/libluajit-5.1.a"
   (cd /tmp/luajit-nx/src && cp lua.h lualib.h lauxlib.h luaconf.h lua.hpp luajit.h \
@@ -151,7 +146,7 @@ fi
 echo ">> Graphics flags: $GL_FLAGS"
 
 # 5) Get the source (run from the directory containing this script)
-cd "$(dirname "$0")"
+cd "$PROJECT_DIR"
 
 # Compat headers in stubs/ (force-included via CFLAGS/CXXFLAGS below):
 #   endian.h       byte-order macros + be32toh etc. (newlib has no <endian.h>)
@@ -188,7 +183,6 @@ cd luanti
 #     of /dev/null, rename() over existing files, device-prefixed absolute paths,
 #     poll() on closed sockets, libnx randomGet, server start error logging,
 #     no -ldl, CMake 4 FindOpenAL).
-#   switch-jit-opt.patch: no-op jit.opt for the interpreter-only LuaJIT (VoxeLibre).
 #   switch-gamepad-pointer.patch: controller-driven mouse pointer in menus.
 #   switch-keyboard.patch: system keyboard for text fields (no reopen loop).
 #   switch-tempdir-extract.patch: mkdtemp() fix + logging for ContentDB installs.
@@ -202,8 +196,10 @@ cd luanti
 #     folder listings instead of thousands of slow file-exists checks.
 #   switch-media-cache.patch: 256 KiB file copies (newlib BUFSIZ is 1 KiB) and
 #     the media cache split into 256 subfolders (FAT lookups are linear).
+#   (switch-jit-opt.patch is a LuaJIT patch applied in step 3c, skipped here.)
 for p in "$PATCHES"/*.patch; do
   [ -e "$p" ] || continue
+  [ "$(basename "$p")" = "switch-jit-opt.patch" ] && continue
   if git apply -R --check "$p" 2>/dev/null; then
     echo ">> Patch already applied: $(basename "$p")"
   else
